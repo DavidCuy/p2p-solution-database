@@ -2,8 +2,6 @@
 --changeset DavidCuy:1 labels:create-database-tables context: First-run-for-liquibase
 --comment: Crea las tablas de la base de datos para el sistema P2P
 
-use p2p-solution-db;
-
 CREATE TYPE p2p_schema.p2p_tx_status AS ENUM ('created', 'running', 'done', 'failure')
 
 CREATE TABLE p2p_schema.users (
