@@ -22,8 +22,8 @@ CREATE TABLE p2p_schema.p2p_transaction  (
   created_at TIMESTAMP DEFAULT NOW(),
 
   PRIMARY KEY(id),
-  CONSTRAINT fk_p2p_transaction_users FOREIGN KEY(source_id) REFERENCES users(id),
-  CONSTRAINT fk_p2p_transaction_users FOREIGN KEY(dest_id) REFERENCES users(id)
+  CONSTRAINT fk_p2p_transaction_users_source_id FOREIGN KEY(source_id) REFERENCES users(id),
+  CONSTRAINT fk_p2p_transaction_users_dest_id FOREIGN KEY(dest_id) REFERENCES users(id)
 
 );
 
