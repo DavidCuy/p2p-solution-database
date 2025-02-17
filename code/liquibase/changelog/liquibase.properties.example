@@ -1,0 +1,5 @@
+classpath: /liquibase/changelog
+url: jdbc:postgresql://<host>:<port>/<database>?currentSchema=<schema>
+changeLogFile: changelog.xml
+username: <username>
+password: <password>

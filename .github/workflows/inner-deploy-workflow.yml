@@ -1,0 +1,95 @@
+name: Inner Deploy Workflow
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+    
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  set_variables:
+    name: "Set Environment Variables"
+    runs-on: ubuntu-latest
+    outputs:
+      env_upper: ${{ steps.lower-upper-env.outputs.uppercase }}
+      env_lower: ${{ steps.lower-upper-env.outputs.lowercase }}
+    steps:
+      - name: Convert environment to uppercase, lowercase
+        uses: ASzc/change-string-case-action@v6
+        id: lower-upper-env
+        with:
+          string: ${{ inputs.environment }}
+
+  update-database:
+    name: Update database using liquibase
+    environment: ${{ needs.set_variables.outputs.env_lower }}
+    runs-on: ubuntu-latest
+    needs: [set_variables]
+    env:
+      BASTION_ID: "${{ secrets[format('{0}_BASTION_ID', needs.set_variables.outputs.env_upper)] }}"
+      LOCAL_PORT: "5432"
+      DB_NAME: "p2p-solution-db"
+      DB_SCHEMA: "p2p_schema"
+      DB_LOCAL_HOST: "localhost"
+      LB_VERSION: "4.14.0"
+
+      ENVIRONMENT: ${{ needs.set_variables.outputs.env_lower }}
+    steps:
+      - uses: actions/checkout@v2
+      - uses: aws-actions/configure-aws-credentials@v1
+        name: Login to aws account
+        with:
+          role-to-assume: ${{ secrets[format('{0}_AWS_ROLE_TO_ASSUME', needs.set_variables.outputs.env_upper)] }}
+          role-session-name: gh-action-session
+          aws-region: ${{ secrets[format('{0}_AWS_REGION', needs.set_variables.outputs.env_upper)] }}
+      - name: Prepare DB Credentials
+        id: resolve-ssm
+        run: |
+          PARAMSTORE_OUTPUT=$(aws ssm get-parameter --name "/config/infra/$ENVIRONMENT/db/credentials")
+          DB_PARAMS=$(echo "$PARAMSTORE_OUTPUT" | jq ".Parameter.Value | fromjson")
+          DB_PASS_SECRET_ARN=$(echo "$DB_PARAMS" | jq '."db-password"' | tr -d '"')
+
+          SECRET_OUTPUT=$(aws secretsmanager get-secret-value --secret-id $DB_PASS_SECRET_ARN)
+          SECRET_STRING=$(echo "$SECRET_OUTPUT" | jq ".SecretString")
+          echo "::add-mask::$SECRET_STRING"
+          echo "SECRET_STRING=$SECRET_STRING" >> $GITHUB_ENV
+      - name: Install liquibase-cli
+        run: |
+          echo Downloading Liquibase ...
+          curl -L https://github.com/liquibase/liquibase/releases/download/v${LB_VERSION}/liquibase-${LB_VERSION}.zip --output liquibase-cli.zip
+          
+          echo Unzipping liquibase-cli.zip file ...
+          unzip -o -q -d . liquibase-cli.zip
+
+          echo Verifying liquibase instalation ...
+          ./liquibase --version
+          
+      - name: Create liquibase.properties file
+        run: |
+          cd ./code/liquibase/changelog
+          touch liquibase.properties
+          DB_USERNAME=$(jq '.username' <<< ${{ env.SECRET_STRING }} | tr -d '"')
+          DB_PASSWORD=$(jq '.password' <<< ${{ env.SECRET_STRING }} | tr -d '"')
+          DB_ENGINE=$(jq '.engine' <<< ${{ env.SECRET_STRING }} | tr -d '"')
+          DB_URL="jdbc:$DB_ENGINE://$DB_LOCAL_HOST:$LOCAL_PORT/$DB_NAME?currentSchema=$DB_SCHEMA"
+          
+          echo "classpath: ./code/liquibase/changelog:./code/liquibase/changelog/postgresql-42.4.0.jar" >> liquibase.properties
+          echo "url: $DB_URL" >> liquibase.properties
+          echo "changeLogFile: changelog.xml" >> liquibase.properties
+          echo "username: $DB_USERNAME" >> liquibase.properties
+          echo "password: $DB_PASSWORD" >> liquibase.properties
+
+      - name: AWS Start session & Run 'Liquibase update' with cli
+        run: |
+          RDS_ENDPOINT=$(jq '.host' <<< ${{ env.SECRET_STRING }} | tr -d '"')
+          RDS_PORT=$(jq '.port' <<< ${{ env.SECRET_STRING }} | tr -d '"')
+
+          aws ssm start-session --target $BASTION_ID --document-name AWS-StartPortForwardingSessionToRemoteHost --parameters host="$RDS_ENDPOINT",portNumber="$RDS_PORT",localPortNumber="$LOCAL_PORT" &
+          echo "AWS Port forwarding success"
+          sleep 5
+          ./liquibase --defaults-file=./code/liquibase/changelog/liquibase.properties --headless=true update

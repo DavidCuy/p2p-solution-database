@@ -1,0 +1,21 @@
+name: Pipeline Dev
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  execute_deploy:
+    strategy:
+      matrix:
+        environment: ["dev"]
+      fail-fast: false
+    uses: ./.github/workflows/inner-deploy-workflow.yml
+    with:
+      environment: "${{ matrix.environment }}"
+    secrets: inherit
+
